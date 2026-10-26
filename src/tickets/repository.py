@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from src.tickets.db import db
+from src.tickets.lifecycle  import check_transition
 
 VALID_PRIORITIES = {"low", "medium", "high", "critical"}
 
@@ -44,3 +45,18 @@ def list_tickets(reporter: str | None = None, status: str | None = None) -> list
     with db() as conn:
         rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
+
+def change_status(key:str , new_status:str) -> dict:
+    with db() as conn:
+        row = conn.execute("SELECT status FROM tickets where key = ?", (key,)).fetchone()
+        if row is None:
+            raise KeyError(f"No Ticket {key}")
+        check_transition(row["status"], new_status)
+
+        conn.execute(
+            "UPDATE tickets SET status =?, updated_at=? WHERE key=?",(new_status,_now(),key),
+        )
+        updated = conn.execute("SELECT * FROM tickets WHERE key = ?",(key,)).fetchone()
+        return dict(updated)
+
+    
