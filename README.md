@@ -14,8 +14,6 @@ Each team member will work on a separate Git branch.
 Changes will be reviewed before merging into the main branch.
 
 ## orchestrator workflow
-# Autonomous IT Service Desk Agent
-
 A multi-agent AI assistant that handles routine IT support requests (troubleshooting questions, account unlocks, access grants) and escalates to humans when it is not confident or not permitted to act.
 
 This is a working prototype built to demonstrate the full architecture at small scale. Enterprise systems (Active Directory, ServiceNow) are mocked.
