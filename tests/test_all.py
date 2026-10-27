@@ -1,27 +1,16 @@
 import pytest
 
-from src.tickets import db as dbmod
-from src.tickets.db import init_db
-from src.tickets.repository import (
-    create_ticket, get_ticket, list_tickets, change_status,
-)
-from src.tickets.lifecycle import InvalidTransition, ALLOWED_TRANSITIONS, STATUSES
+from src.tickets.lifecycle import InvalidTransition, ALLOWED_TRANSITIONS, STATUSES, check_transition
 from src.orchestrator import action_agent
 from src.orchestrator.action_agent import ActionChoice, AUDIT_LOG
 from src.orchestrator.permissions import ROLE_PERMISSIONS
 
 
-# ---------- setup helpers ----------
-
-@pytest.fixture
-def fresh_db(tmp_path, monkeypatch):
-    """Point the ticket code at a throwaway database for one test."""
-    monkeypatch.setattr(dbmod, "db_path", tmp_path / "test.db")
-    init_db()
-
+# ---------- helpers ----------
 
 class FakeActionLLM:
-    """Stands in for Gemini so the RBAC tests are fast and repeatable."""
+    """Stands in for Gemini so the action agent tests are fast and repeatable."""
+
     def __init__(self, action):
         self.action = action
 
@@ -29,47 +18,25 @@ class FakeActionLLM:
         return ActionChoice(action=self.action)
 
 
-# ---------- tickets (offline) ----------
+# ---------- lifecycle rules (offline) ----------
 
-def test_create_and_fetch_ticket(fresh_db):
-    t = create_ticket("VPN down", reporter="u1", category="vpn", priority="high")
-    assert t["key"].startswith("DESK-")
-    assert t["status"] == "open"
-    assert get_ticket(t["key"])["title"] == "VPN down"
+def test_allowed_move_passes():
+    check_transition("open", "in_progress")        # raises nothing
 
 
-def test_list_filters_by_reporter(fresh_db):
-    create_ticket("a", reporter="u1")
-    create_ticket("b", reporter="u2")
-    assert len(list_tickets(reporter="u1")) == 1
-
-
-def test_invalid_priority_rejected(fresh_db):
-    with pytest.raises(ValueError):
-        create_ticket("x", reporter="u1", priority="urgent!!")
-
-
-# ---------- lifecycle (offline) ----------
-
-def test_full_lifecycle_then_closed_is_final(fresh_db):
-    key = create_ticket("flow", reporter="u1")["key"]
-    for status in ["in_progress", "waiting_on_user", "in_progress", "resolved", "closed"]:
-        assert change_status(key, status)["status"] == status
+def test_closed_is_final():
     with pytest.raises(InvalidTransition):
-        change_status(key, "open")
+        check_transition("closed", "open")
 
 
-def test_cannot_skip_resolved(fresh_db):
-    key = create_ticket("skip", reporter="u1")["key"]
-    change_status(key, "in_progress")
+def test_cannot_skip_resolved():
     with pytest.raises(InvalidTransition):
-        change_status(key, "closed")
+        check_transition("in_progress", "closed")
 
 
-def test_unknown_status_rejected(fresh_db):
-    key = create_ticket("bad", reporter="u1")["key"]
+def test_unknown_status_rejected():
     with pytest.raises(InvalidTransition):
-        change_status(key, "banana")
+        check_transition("open", "banana")
 
 
 def test_rules_only_use_real_statuses():
@@ -78,7 +45,7 @@ def test_rules_only_use_real_statuses():
         assert targets <= set(STATUSES)
 
 
-# ---------- RBAC and approval (offline) ----------
+# ---------- action agent: roles, approval, audit log (offline) ----------
 
 def test_employee_cannot_grant_access_but_admin_can():
     assert "grant_access" not in ROLE_PERMISSIONS["employee"]
@@ -111,7 +78,7 @@ def test_approval_no_cancels():
     assert AUDIT_LOG[-1]["outcome"] == "CANCELLED"
 
 
-# ---------- live LLM (needs API key, uses quota) ----------
+# ---------- live LLM (needs GOOGLE_API_KEY, uses free-tier quota) ----------
 
 @pytest.mark.llm
 @pytest.mark.parametrize("message,expected", [

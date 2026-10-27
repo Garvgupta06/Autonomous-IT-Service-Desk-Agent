@@ -13,10 +13,10 @@ for p in list_projects():
 print("Issue types in this project:", list_issue_types())
 
 created = create_issue(
-    summary="need to change password",
-    description="user forgot password and wants to reset it.",
+    summary="windows update troubleshoot",
+    description="windows is crashing due to latest update.",
     requester="u1",
-    labels=["password"],
+    labels=["windows_update"],
 )
 print("Created:", created["key"])
 print("Fetched:", get_issue(created["key"]))
