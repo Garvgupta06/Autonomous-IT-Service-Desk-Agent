@@ -72,3 +72,28 @@ def get_issue(key: str) -> dict:
         "status": f["status"]["name"],
         "labels": f.get("labels", []),
     }
+
+def get_transitions(key: str) -> list[dict]:
+    data = _request("GET", f"/rest/api/3/issue/{key}/transitions")
+    return [
+        {"id": t["id"], "name": t["name"], "to": t["to"]["name"]}
+        for t in data["transitions"]
+    ]
+
+
+def move_issue(key: str, target_status: str) -> dict:
+    options = get_transitions(key)
+    match = next(
+        (t for t in options if t["to"].lower() == target_status.lower()), None
+    )
+    if match is None:
+        available = [t["to"] for t in options]
+        raise JiraError(f"{key} cannot move to '{target_status}'. Available: {available}")
+    _request("POST", f"/rest/api/3/issue/{key}/transitions",
+             json={"transition": {"id": match["id"]}})
+    return get_issue(key)
+
+
+def add_comment(key: str, text: str) -> dict:
+    return _request("POST", f"/rest/api/3/issue/{key}/comment",
+                    json={"body": _adf(text)})
