@@ -1,111 +1,112 @@
 # Autonomous IT Service Desk Agent
 
-An AI-powered IT support system designed to answer common IT questions using knowledge retrieval and assist with ticket management.
+A multi-agent AI assistant for IT support. It classifies a user's message, routes it to the right agent, and asks for approval before it changes anything. Unclear requests get a clarifying question instead of a guess.
 
-## Project Modules
+This is a college prototype. Retrieval (RAG) and the Jira client are built but not yet connected to the main flow, and all actions are simulated. See "Current status" for exactly what works today.
 
-- RAG and Knowledge Retrieval
-- Orchestration Agent
-- Frontend Interface
-
-## Team Workflow
-
-Each team member will work on a separate Git branch.
-Changes will be reviewed before merging into the main branch.
-
-## orchestrator workflow
-A multi-agent AI assistant that handles routine IT support requests (troubleshooting questions, account unlocks, access grants) and escalates to humans when it is not confident or not permitted to act.
-
-This is a working prototype built to demonstrate the full architecture at small scale. Enterprise systems (Active Directory, ServiceNow) are mocked.
-
-## How it works
+## How it works today
 
 Every message goes through a LangGraph state machine:
 
 ```
-User message
+User message  (POST /chat)
      |
      v
- Entry router --(action pending approval?)--> Approval handler
+ Entry router --(action waiting for approval?)--> Approval handler
      |
      v
- Intent classifier (LLM) -> knowledge_question | action_request | unclear
+ Intent classifier (Gemini) -> knowledge_question | action_request | unclear
      |
-     +-- knowledge_question --> RAG agent        (retrieves from runbooks)
-     +-- action_request -----> Action agent      (RBAC check + approval)
+     +-- knowledge_question --> RAG stub        (placeholder, real RAG not connected yet)
+     +-- action_request -----> Action agent     (role check, then asks for approval)
      +-- unclear / low confidence --> Clarifying question
      |
      v
- Conversation history updated -> response returned
+ Response returned
 ```
 
-Key design points:
+Design points that are already in the code:
 
-- **The LLM proposes, the code enforces.** The model only identifies which action was requested. A fixed permissions table decides whether the user's role may perform it.
-- **Human-in-the-loop approval.** Sensitive actions are proposed first and only executed after the user replies "yes".
-- **Audit logging.** Every executed, denied or cancelled action is logged.
-- **Multi-turn memory.** Conversation state is stored per `thread_id`, so follow-up messages are understood in context.
-- **Safe fallback.** Vague or low-confidence messages get a clarifying question instead of a guess.
+- **The LLM proposes, the code enforces.** The model only picks which action was asked for. A permissions table decides whether the user's role may perform it.
+- **Approval before action.** Allowed actions are proposed first and only run after the user replies "yes".
+- **Audit log.** Executed, denied and cancelled actions are logged (in memory for now).
+- **Per-thread state.** The graph uses a checkpointer, so a conversation keeps its state under its `thread_id`, which is how an approval reply finds the pending action.
+- **Safe fallback.** Unclear or low-confidence messages (below 0.6) get a clarifying question.
 
 ## Current status
 
-| Component | Status |
-|---|---|
-| Intent classifier (Gemini, structured output) | Done |
-| Routing graph (LangGraph) | Done |
-| Action agent with RBAC and approval | Done (actions are simulated) |
-| Multi-turn conversation history | Done |
-| FastAPI `/chat` endpoint | Done |
-| RAG agent (hybrid dense + BM25 retrieval) | In progress (`feature/rag`), stub in place |
-| Slack bot front-end | In progress (`feature/frontend`) |
-| ITSM (ServiceNow/Jira) integration | Planned, will be mocked |
+| Component | Branch | Status |
+|---|---|---|
+| Intent classifier (Gemini, structured output) | `feature/orchestrator` | Working |
+| Routing graph and `/chat` endpoint | `feature/orchestrator` | Working |
+| Action agent: role check, approval, audit log | `feature/orchestrator` | Working, actions simulated |
+| Ticket role policy (`rbac.py`) and status rules (`lifecycle.py`) | `feature/orchestrator` | Written, not yet used by the agent |
+| Jira Cloud client (create, read, move, comment) | `feature/orchestrator` | Written, not yet used by the agent |
+| History-aware classification | not in repo yet | The classifier currently reads only the latest message |
+| Document ingestion, chunking, BM25 and semantic retrieval | `feature/rag` | Written with tests, not connected to the graph |
+| Hybrid fusion of BM25 and semantic results | not in repo yet | Planned |
+| Web UI / Slack front-end | `feature/frontend` | Not started (README only) |
 
-## Project structure
+`main` currently holds an older snapshot of the orchestrator work, from before the Jira and ticket modules.
+
+## Project structure (`feature/orchestrator`)
 
 ```
 src/
-  main.py                  FastAPI app (/health, /chat)
-  state.py                 Shared AgentState
-  graph.py                 LangGraph wiring and routing
+  main.py                    FastAPI app: /health and /chat
+  state.py                   Shared AgentState
+  graph.py                   Graph wiring and routing
   orchestrator/
-    classifier.py          Intent classification node
-    action_agent.py        Action proposal, RBAC check, approval, audit log
-    permissions.py         Role -> allowed actions table
-    stubs.py               Placeholder RAG agent and clarifying-question node
-tests/                     Scripts to exercise each part
-data/                      Runbooks for the knowledge base
+    classifier.py            Intent classification
+    action_agent.py          Action proposal, approval, audit log
+    permissions.py           Role -> allowed actions (used by the action agent)
+    stubs.py                 Placeholder RAG agent and clarifying question
+  tickets/
+    rbac.py                  Roles, scopes and approval policy for tickets
+    lifecycle.py             Allowed ticket status changes
+  jira/
+    client.py                Jira Cloud REST client
+tests/
+  test_all.py                Offline tests plus live-LLM tests
+  manual/jira_check.py       Checks the Jira connection
+pytest.ini                   Defines the "llm" test marker
 ```
+
+RAG code lives on `feature/rag` under `backend/rag/` (`ingestion.py`, `chunking.py`, `bm25.py`, `semantic.py`, `embedder.py`) with tests in `tests/rag/`. The folder layout of the two branches still needs to be agreed before they are merged.
 
 ## Setup
 
-Requires Python 3.10+.
+Requires Python 3.10 or newer.
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # Mac/Linux
 pip install -r requirements.txt
 ```
 
 Create a `.env` file in the project root (it is git-ignored):
 
 ```
-GOOGLE_API_KEY=your_key_here
+GOOGLE_API_KEY=your_gemini_key
+
+# Only needed for the Jira client
+JIRA_BASE_URL=https://yoursite.atlassian.net
+JIRA_EMAIL=you@example.com
+JIRA_API_TOKEN=your_token
+JIRA_PROJECT_KEY=DESK
 ```
 
-A free key is available from Google AI Studio.
+A free Gemini key is available from Google AI Studio. Never commit `.env`.
+
+The RAG branch uses a local Ollama server for embeddings (default model `nomic-embed-text`) and `pypdf` and `numpy`.
 
 ## Running
-
-Start the API from the project root:
 
 ```bash
 uvicorn src.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` to try the endpoints in the browser.
-
-Example request:
+Open `http://127.0.0.1:8000/docs` to try the endpoints.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
@@ -113,13 +114,13 @@ curl -X POST http://127.0.0.1:8000/chat \
   -d '{"user_id": "u1", "message": "please unlock my account", "thread_id": "demo1"}'
 ```
 
-Reply to the approval prompt using the same `thread_id`:
+Approve with a second message on the same `thread_id`:
 
 ```json
 {"user_id": "u1", "message": "yes", "thread_id": "demo1"}
 ```
 
-Use a new `thread_id` for each new conversation. Conversation memory is held in RAM, so restarting the server clears it.
+Use a new `thread_id` for each new conversation. State is held in memory, so restarting the server clears it.
 
 ## Demo users
 
@@ -130,26 +131,30 @@ Use a new `thread_id` for each new conversation. Conversation memory is held in 
 
 ## Tests
 
-Run from the project root:
-
 ```bash
-python -m tests.classifier_test
-python -m tests.test_graph
-python -m tests.action_test
+pytest -m "not llm" -v     # offline tests, no API calls
+pytest -v                  # also runs the live Gemini tests
+python -m tests.manual.jira_check    # needs the Jira values in .env
 ```
 
-These call the live LLM, so they need a valid `GOOGLE_API_KEY`.
+The `llm` tests call Gemini, so they need a valid key and use free-tier quota.
 
-## Scope and limitations
+## Limitations
 
-- Active Directory and SaaS actions are simulated; no real systems are touched.
-- Approval is currently given by the requesting user. In production, sensitive actions would require approval from a separate IT approver.
-- Roles come from a hard-coded table, not a real identity provider.
-- Conversation memory is in-process and not persistent.
+- Account unlocks and access grants are simulated. No real system is touched.
+- The knowledge-question path returns a placeholder until RAG is connected.
+- Approval comes from the same user who asked. A real setup would use a separate approver.
+- Roles are a hard-coded table, not an identity provider.
+- State and the audit log are in memory and are lost on restart.
+- Jira and the ticket policy exist as modules but are not part of the chat flow yet.
 
-## Team branches
+## Direction
 
-- `main`: shared, working version
-- `feature/orchestrator`: backend and orchestration
-- `feature/rag`: knowledge base and retrieval
-- `feature/frontend`: Slack bot and UI
+Following mentor feedback, the next phase is to make the agent work on the user's own machine: scan the laptop with read-only checks, diagnose from that evidence, propose the top two fixes for that device, and run a fix only after approval. Jira becomes the place where unresolved cases are escalated with the scan attached. This is planned and not yet implemented.
+
+## Branches
+
+- `main`: shared version (older snapshot for now)
+- `feature/orchestrator`: backend, orchestration, Jira client, ticket policy
+- `feature/rag`: knowledge base ingestion and retrieval
+- `feature/frontend`: user interface
