@@ -2,6 +2,7 @@ import platform
 import socket
 import time
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
 
 import psutil
 
@@ -102,11 +103,26 @@ def check_network() -> Finding:
                    {"active_adapters": active, "internet_ok": internet_ok, "dns_ok": dns_ok})
 
 
-def run_all() -> list[Finding]:
-    return [check_system(), check_cpu(), check_memory(), *check_disks(), check_network()]
+CHECKS_BY_CATEGORY = {
+    "network":     [check_network],
+    "storage":     [check_disks],
+    "performance": [check_cpu, check_memory, check_disks, check_system],
+    "general":     [check_system, check_cpu, check_memory, check_disks],
+}
+
+
+def run_for(category: str) -> list[Finding]:
+    checks = CHECKS_BY_CATEGORY.get(category, CHECKS_BY_CATEGORY["general"])
+    findings = []
+    with ThreadPoolExecutor() as pool:
+        for result in pool.map(lambda check: check(), checks):
+            findings.extend(result if isinstance(result, list) else [result])
+    return findings
 
 
 if __name__ == "__main__":
-    for f in run_all():
+    import sys
+    category = sys.argv[1] if len(sys.argv) > 1 else "general"
+    for f in run_for(category):
         print(f"[{f.severity.upper():4}] {f.check:8} {f.summary}")
         print("        evidence:", f.evidence)

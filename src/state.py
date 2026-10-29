@@ -9,3 +9,5 @@ class AgentState(TypedDict):
     confidence: Optional[float]
     response: Optional[str]
     pending_action: Optional[str]
+    category: Optional[str]      # network, storage, performance, general, none
+    findings: Optional[list]     # scan results
