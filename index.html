@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Service Desk Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div id="toasts" aria-live="polite"></div>
+
+<!-- AUTH -->
+<section id="auth" class="auth" hidden>
+  <div class="auth-side">
+    <div class="brand light"><span class="logo">SD</span> Service Desk Agent</div>
+    <h1>Smarter IT support for your campus</h1>
+    <p>Get answers from your knowledge base, raise tickets and track them to resolution.</p>
+    <ul class="ticks"><li>AI answers with source references</li><li>Live ticket status tracking</li><li>Separate views for users and IT admins</li></ul>
+  </div>
+  <div class="auth-panel"><div class="card auth-card">
+    <div class="tabs"><button class="tab active" data-mode="login" type="button">Log in</button><button class="tab" data-mode="signup" type="button">Sign up</button></div>
+    <form id="authForm" novalidate>
+      <div class="seg" id="roleSeg" aria-label="Role"><button type="button" class="seg-btn active" data-role="user">Employee / Student</button><button type="button" class="seg-btn" data-role="admin">IT Support Admin</button></div>
+      <label data-signup hidden>Full name <input name="name" autocomplete="name"><small class="err" data-err="name"></small></label>
+      <label>Email <input name="email" type="email" autocomplete="email"><small class="err" data-err="email"></small></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password"><small class="err" data-err="password"></small></label>
+      <div id="authResult" role="alert"></div>
+      <button class="btn block" id="authBtn" type="submit">Log in</button>
+    </form>
+    <p class="hint" data-mock-demo></p>
+  </div></div>
+</section>
+
+<!-- APP -->
+<div id="app" hidden>
+<header class="nav">
+  <a class="brand" href="#home"><span class="logo">SD</span> Service Desk Agent</a>
+  <button class="menu-btn" id="menuBtn" aria-label="Toggle menu" aria-expanded="false">Menu</button>
+  <nav id="navLinks">
+    <a href="#home">Home</a><a href="#dashboard">Dashboard</a><a href="#chat">AI Chat</a><a href="#tickets">Tickets</a>
+    <a class="btn small" href="#new-ticket">New ticket</a>
+    <div class="user"><span class="avatar" id="avatar"></span><div class="who"><strong id="uName"></strong><span id="uRole" class="pill"></span></div>
+      <button class="btn ghost small" id="logoutBtn" type="button">Log out</button></div>
+  </nav>
+</header>
+
+<main>
+<section class="page" data-page="home">
+  <div class="hero">
+    <h1>Fix IT problems in minutes, not days</h1>
+    <p>Describe what's wrong. Service Desk Agent suggests fixes from your IT knowledge base, and you can raise a ticket if you still need a person.</p>
+    <div class="row"><a class="btn" href="#chat">Ask the AI</a><a class="btn ghost" href="#new-ticket">Raise a ticket</a></div>
+  </div>
+  <div class="grid3">
+    <div class="card"><h3>AI assistance</h3><p>Ask about Wi-Fi, passwords, software or hardware in plain language and get step-by-step help.</p></div>
+    <div class="card"><h3>Knowledge-based answers</h3><p>Answers show the documents they came from, so you can check them.</p></div>
+    <div class="card"><h3>Ticket management</h3><p>Submit tickets, filter by status and follow each one until it is resolved.</p></div>
+  </div>
+</section>
+
+<section class="page" data-page="dashboard">
+  <div class="page-head"><div><h2>Dashboard</h2><p class="sub" id="welcome"></p></div>
+    <div class="row"><a class="btn" href="#new-ticket">New ticket</a><a class="btn ghost" href="#chat">Ask the AI</a></div></div>
+  <div class="mock-note" data-mock-note></div>
+  <div class="stats" id="stats"></div>
+  <h3>Recent tickets</h3>
+  <div id="recentTickets"></div>
+</section>
+
+<section class="page" data-page="chat">
+  <div class="page-head"><h2>AI support chat</h2><button class="btn ghost" id="clearChat">New conversation</button></div>
+  <div class="mock-note" data-mock-note></div>
+  <div class="chat">
+    <div class="messages" id="messages" aria-live="polite"></div>
+    <form class="chat-form" id="chatForm">
+      <textarea id="chatInput" rows="2" placeholder="e.g. My laptop is connected to Wi-Fi but I cannot access the internet" aria-label="Your question"></textarea>
+      <button class="btn" type="submit" id="sendBtn">Send</button>
+    </form>
+    <p class="hint">Enter to send, Shift+Enter for a new line. In mock mode, type "fail" to test the error message.</p>
+  </div>
+</section>
+
+<section class="page" data-page="new-ticket">
+  <div class="page-head"><h2>Raise a support ticket</h2></div>
+  <div class="mock-note" data-mock-note></div>
+  <form class="card form" id="ticketForm" novalidate>
+    <label>Title <input name="title" maxlength="100"><small class="err" data-err="title"></small></label>
+    <label>Problem description <textarea name="description" rows="5"></textarea><small class="err" data-err="description"></small></label>
+    <div class="two">
+      <label>Category <select name="category"><option value="">Select…</option><option>Network</option><option>Software</option><option>Account Access</option><option>Hardware</option></select><small class="err" data-err="category"></small></label>
+      <label>Priority <select name="priority"><option value="">Select…</option><option>Low</option><option>Medium</option><option>High</option></select><small class="err" data-err="priority"></small></label>
+    </div>
+    <label>Employee / student ID (optional) <input name="contact"></label>
+    <button class="btn" type="submit" id="submitBtn">Submit ticket</button>
+    <div id="formResult" role="status"></div>
+  </form>
+</section>
+
+<section class="page" data-page="tickets">
+  <div class="page-head"><h2 id="ticketsTitle">Tickets</h2><a class="btn" href="#new-ticket">New ticket</a></div>
+  <div class="mock-note" data-mock-note></div>
+  <div class="filters" id="filters">
+    <button class="chip active" data-status="All">All</button><button class="chip" data-status="Open">Open</button>
+    <button class="chip" data-status="In Progress">In Progress</button><button class="chip" data-status="Resolved">Resolved</button>
+  </div>
+  <div id="ticketList"></div>
+</section>
+</main>
+
+<dialog id="ticketDialog"><div id="dialogBody"></div><button class="btn ghost" id="closeDialog">Close</button></dialog>
+<footer class="footer"><span>Service Desk Agent — college project</span><span>Frontend module</span></footer>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/mockData.js"></script>
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
