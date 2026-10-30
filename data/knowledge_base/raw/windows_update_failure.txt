@@ -1,0 +1,334 @@
+Runbook: Windows Update Failure Troubleshooting
+
+Status	Approved / Active
+Author	Enterprise IT Endpoint Engineering
+Date	May 2026
+Version	1.0
+
+Table of Contents
+Right-click and select 'Update Field' to populate the table of contents.
+
+
+1. Purpose
+This runbook provides an evidence-based, deterministic procedure for enterprise IT service desk engineers and autonomous RAG agents to diagnose, remediate, and escalate persistent Windows Update installation and download failures on enterprise-managed endpoints. It aims to restore update compliance while strictly maintaining security and system integrity.
+2. Scope and Symptoms
+2.1 In Scope
+Windows 10 (21H2, 22H2) Enterprise / Pro
+Windows 11 (22H2, 23H2, 24H2) Enterprise / Pro
+Cumulative Updates (LCU), Servicing Stack Updates (SSU), and Security Updates
+Failure modes: Download stuck at 0%–99%, installation rollbacks with error codes (e.g., 0x80070002, 0x80070070, 0x80248007, 0x800F081F, 0x80070005), or repeated update loops.
+2.2 Out of Scope
+Upgrades to major operating system builds blocked by hardware incompatibility (TPM 2.0 / CPU generation).
+Third-party software patch management (e.g., Adobe, Chrome).
+Third-party antivirus configuration modifications (must follow endpoint security team delegation).
+2.3 Common Symptoms
+Windows Settings displays “Updates failed: There were problems installing some updates, but we’ll try again later”.
+Installation progresses to a specific percentage, halts, reboots, and displays “Undoing changes made to your computer.”
+Repeated occurrence of identical hex error codes across scheduled update cycles.
+3. Prerequisites and Permissions
+Account Privileges: Local Administrator permissions are required on the target machine for service operations, component cleanup, and log generation.
+Network Connectivity: Unhindered outbound HTTPS (TCP port 443) connectivity to official Microsoft Update endpoints or internal enterprise WSUS/Intune delivery optimization endpoints.
+Power Requirement: Minimum 50% battery or connected AC power (for mobile endpoints).
+Disk Space: A minimum of 20 GB free disk space on the system partition (C:) is recommended for cumulative update staging and component store servicing.
+Organizational Policy Warning: Do not disable Mobile Device Management (MDM) enrollment, tamper with Group Policy objects (GPOs), or terminate endpoint detection and response (EDR) sensors under any circumstance.
+4. Required Information
+Before taking action, capture and record the following attributes in the incident record:
+Parameter	Source Location	Example Value
+OS Version & Build	winver or PowerShell [System.Environment]::OSVersion	Windows 11 23H2 (Build 22631.3007)
+Failing KB Article	Windows Update Settings / Event Viewer	KB5034441
+Exact Error Code	Update history / Event ID 20	0x80070002 or 0x800F081F
+Update Management Authority	Registry: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate	Windows Update for Business (Intune) / WSUS
+Available Disk Space	System Drive (C:)	14.2 GB free
+
+5. Diagnostic Decision Tree
+[Start: Windows Update Failure Detected]
+  |
+  +---> [Step 6.1: Verify Storage & System State]
+  |       |-- IF Free Space < 15 GB -----------------> [Remediate Disk Space; Re-evaluate]
+  |       |-- IF Pending Reboot Detected ------------> [Perform Controlled Restart; Retry Update]
+  |       \-- IF Space OK & No Pending Reboot -------> Proceed to Step 6.2
+  |
+  +---> [Step 6.2: Inspect Error Code & Update History]
+  |       |-- IF Network/Proxy Code (0x80244xxx) ----> [Validate WSUS/CDN Endpoints; Check WinHTTP Proxy]
+  |       |-- IF Component Store Code (0x800Fxxxx) --> Skip to Step 6.4 (DISM / SFC)
+  |       |-- IF Datastore Code (0x80248xxx) --------> Skip to Step 6.3 (Reset WU Components)
+  |       \-- IF Generic Failure (0x8007xxxx) -------> Proceed to Step 6.3
+  |
+  +---> [Step 6.3: Built-in Troubleshooter & Service Diagnostics]
+  |       |-- IF Troubleshooter fixes issue ---------> [Trigger Manual Update Scan; Verify]
+  |       \-- IF Issue persists ---------------------> Proceed to Step 6.4
+  |
+  +---> [Step 6.4: Servicing Component Store & Image Repair (DISM & SFC)]
+  |       |-- IF Corrupted files successfully fixed -> [Reboot and Retry Windows Update]
+  |       |-- IF DISM returns "Source not found" ----> [Escalate or Configure Valid Repair Source]
+  |       \-- IF Image clean but WU fails -----------> Proceed to Step 6.5
+  |
+  +---> [Step 6.5: Controlled Reset of SoftwareDistribution & Catroot2]
+  |       |-- IF Reset succeeds and update installs -> [Document Resolution & Clean Up Backups]
+  |       \-- IF Update still fails -----------------> Proceed to Step 6.6
+  |
+  +---> [Step 6.6: Manual Standalone Package Installation (.MSU)]
+          |-- IF Standalone installs successfully ---> [Resolution Complete; Monitor Next Cycle]
+          \-- IF Standalone fails with error --------> [Execute Section 8: Log Collection & Escalate]
+
+6. Step-by-Step Troubleshooting Procedures
+6.1 Verify Storage Capacity and Pending Reboot State
+Purpose: Eliminate prerequisite blockers (insufficient working space and uncommitted transaction locks) that fail updates without logging specific component errors.
+Action:
+1.Check free storage on drive C:.
+2.Inspect registry for reboot flags.
+Location: Path: Settings > System > Storage
+Registry: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending
+Expected Result: Free space >= 15 GB.
+No pending reboot keys exist.
+Decision Path:
+IF free space is < 15 GB, THEN run Windows Disk Cleanup (cleanmgr.exe via elevated Command Prompt) to purge temporary system cache. Do not delete user documents or unapproved directories.
+IF a reboot is pending, THEN restart the endpoint and recheck Windows Update.
+IF prerequisites pass and update continues failing, THEN proceed to Step 6.2.
+
+6.2 Identify Specific Update Error Code and Stage
+Purpose: Determine the failure phase (Scan, Download, or Installation) and isolate the hexadecimal HRESULT error code.
+Action:
+3.Open Windows Update history.
+4.Locate the failed KB number and click on it or review the details to copy the error code (e.g., 0x80248007, 0x80070002, 0x800F081F).
+Location: Windows 11: Settings > Windows Update > Update history
+Windows 10: Settings > Update & Security > Windows Update > View update history
+Event Viewer: Applications and Services Logs > Microsoft > Windows > WindowsUpdateClient > Operational (Filter for Event ID 20)
+Expected Result: Clear error code mapped to the failed KB package.
+Decision Path:
+IF error is 0x80070070 (ERROR_DISK_FULL), THEN reclaim disk space on volume C:.
+IF error is 0x80248007 / 0x80248014 (WU_E_DS_NODATA / Datastore corruption), THEN go to Step 6.5.
+IF error is 0x800F081F / 0x800F0906 / 0x800F0988 (Component store corruption), THEN go directly to Step 6.4.
+IF error code is indeterminate or generic, THEN proceed to Step 6.3.
+
+6.3 Run the Built-In Windows Update Diagnostic Engine
+Purpose: Execute automated basic remediation (verifies background service flags, resets default registry indicators, flushes volatile queues) without manual intervention.
+Action:
+5.Navigate to Windows Troubleshooters.
+6.Select and run the Windows Update Troubleshooter.
+Location: Windows 11: Settings > System > Troubleshoot > Other troubleshooters > Windows Update > Run
+Windows 10: Settings > Update & Security > Troubleshoot > Additional troubleshooters > Windows Update > Run the troubleshooter
+Expected Result: Troubleshooter completes with “Check for Windows Update issues — Fixed” or “No changes were made.”
+Decision Path:
+IF issues were fixed, THEN return to Settings > Windows Update and click Check for updates.
+IF issues were not detected or the subsequent update attempt fails, THEN proceed to Step 6.4.
+
+6.4 Servicing Component Store and System File Integrity Repair
+Purpose: Scan and repair corruption in the Windows Component Store (%windir%\WinSxS) and repair damaged Windows system files using DISM and SFC.
+Permissions: Administrative Command Prompt or PowerShell required.
+Action:
+7.Verify component store state (read-only inspection):
+DISM /Online /Cleanup-Image /ScanHealth
+
+8.If repairable, restore the store using the Windows Update servicing engine:
+DISM /Online /Cleanup-Image /RestoreHealth
+
+9.Execute System File Checker to repair system binaries:
+sfc /scannow
+
+Location / Logs: Logs: %windir%\Logs\CBS\CBS.log and %windir%\Logs\DISM\dism.log
+Expected Result: DISM: “The restore operation completed successfully”.
+SFC: “Windows Resource Protection found corrupt files and successfully repaired them” or “…did not find any integrity violations”.
+Decision Path:
+IF DISM completes successfully, THEN restart the computer and retry Windows Update.
+IF DISM returns error 0x800F081F (Source files could not be found), THEN do not attempt third-party registry cleaners; the enterprise proxy or local WSUS is likely blocking access to repair payloads. Proceed to Section 8 and escalate.
+IF corruption is clean/repaired but Windows Update still fails, THEN proceed to Step 6.5.
+
+6.5 Controlled Reset of the Windows Update Cache
+Purpose: Clear cached download payloads and rebuild the local catalog database without deleting system components.
+Permissions: Local Administrator.
+Safety Precaution: Never delete these directories. Rename them to .old or .bak. This preserves recovery rollback capability if cryptographic services or update receipts fail to rebuild.
+Action:
+10.Open an elevated Command Prompt or PowerShell session.
+11.Stop update-dependent services:
+net stop wuauserv
+net stop cryptSvc
+net stop bits
+net stop msiserver
+
+12.Rename cache directories:
+ren C:\Windows\SoftwareDistribution SoftwareDistribution.old
+ren C:\Windows\System32\catroot2 catroot2.old
+
+13.Restart services:
+net start msiserver
+net start bits
+net start cryptSvc
+net start wuauserv
+
+Expected Result: Services restart with status code 0. New SoftwareDistribution and catroot2 folders will be initialized upon the next update query.
+Decision Path:
+IF folders are locked, THEN ensure all four services are completely stopped. Check for background handles before re-attempting rename.
+IF rename succeeds, THEN go to Settings > Windows Update and trigger a fresh scan. Allow up to 10 minutes for manifest re-indexing.
+IF scan completes and installation succeeds, THEN proceed to Section 9 (Resolution Verification).
+IF installation fails with the same error, THEN proceed to Step 6.6.
+
+6.6 Manual Standalone Package Installation
+Purpose: Determine whether the failure is in the local Windows Update Client/Agent or inside the servicing package payload itself.
+Prerequisites: Note the failing KB identifier (e.g., KB5034441).
+Action:
+14.Open an authenticated enterprise browser session to the official Microsoft Update Catalog.
+15.Search for the exact KB number.
+16.Locate the entry that matches the endpoint’s OS version (e.g., Windows 11 23H2) and processor architecture (e.g., x64 or ARM64).
+17.Download the .msu file.
+18.Install via elevated Command Prompt:
+wusa.exe "C:\Path\To\UpdatePackage.msu" /quiet /norestart
+
+19.Monitor the Windows Event Viewer under Setup for event logs from WUSA.
+Expected Result: Event ID 2 in Setup log confirming successful installation.
+Decision Path:
+IF installation completes successfully, THEN reboot the device to commit changes and verify resolution in Section 9.
+IF wusa.exe fails with an error dialogue or exit code, THEN stop further automated remediation, collect diagnostic logs per Section 8, and follow Section 10 for escalation.
+
+7. PowerShell Diagnostics
+All commands in this section must be executed in an elevated Windows PowerShell or PowerShell 7 session (Run as Administrator).
+7.1 Inspect Windows Update Service States
+Operation Mode: [INSPECT ONLY] (No state changes)
+Purpose: Verify that dependent services are present, enabled, and in their expected startup configuration.
+Get-Service -Name wuauserv, bits, cryptsvc, trustedinstaller | 
+    Select-Object Name, DisplayName, Status, StartType | 
+    Format-Table -AutoSize
+
+Expected Output: Name              DisplayName                         Status   StartType
+——              —————-                         ———   ————-
+wuauserv          Windows Update                      Running  Manual (or Automatic)
+bits              Background Intelligent Transfer … Running  Manual (or Automatic)
+cryptsvc          Cryptographic Services              Running  Automatic
+trustedinstaller  Windows Modules Installer           Running  Manual
+Interpretation: If StartType is Disabled on any of these four services, Windows Update cannot function.
+If cryptsvc is Stopped, signature validation of downloaded update packages will fail with 0x800B0109 or 0x80070005.
+
+7.2 Inspect Enterprise Update Policies and WSUS Configuration
+Operation Mode: [INSPECT ONLY] (No state changes)
+Purpose: Determine if the machine is directed to an internal WSUS server or governed by Intune/Windows Update for Business policies.
+Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" -ErrorAction SilentlyContinue |
+    Select-Object WUServer, WUStatusServer, TargetReleaseVersion, TargetReleaseVersionInfo |
+    Format-List
+
+Expected Output: In a cloud-native Intune setup: Property returns empty or minimal configurations.
+In a WSUS setup: WUServer and WUStatusServer point to an internal endpoint (e.g., https://wsus.corp.contoso.com:8531).
+Interpretation: If WUServer is populated, test TCP connectivity to that target (see 7.3).
+If the machine is remote/off-VPN and pointing to an unreachable internal WSUS server, update downloads will time out with error 0x8024401C or 0x8024402C.
+
+7.3 Test Connectivity to Servicing Endpoints
+Operation Mode: [INSPECT ONLY] (No state changes)
+Purpose: Validate network egress to Microsoft Update services or the configured WSUS endpoint.
+# For public Windows Update / Delivery Optimization:
+Test-NetConnection -ComputerName "slscr.update.microsoft.com" -Port 443 | 
+    Select-Object ComputerName, RemoteAddress, TcpTestSucceeded
+
+# For enterprise endpoints using WinHTTP proxy:
+netsh winhttp show proxy
+
+Expected Output: TcpTestSucceeded : True
+WinHTTP Proxy matches organizational proxy configuration or shows Direct access (no proxy server).
+Interpretation: If TcpTestSucceeded is False, update payloads are being dropped at an enterprise network boundary, proxy, or egress firewall.
+
+7.4 Inspect Recent Update Failure Events
+Operation Mode: [INSPECT ONLY] (No state changes)
+Purpose: Query the Windows Update Client event provider to identify the last 5 update installation failures with raw hex codes.
+Get-WinEvent -FilterHashtable @{
+    LogName = 'Microsoft-Windows-WindowsUpdateClient/Operational'
+    Id      = 20
+} -MaxEvents 5 -ErrorAction SilentlyContinue | 
+    Select-Object TimeCreated, Id, Message | 
+    Format-List
+
+Expected Output: Event records displaying: “Installation Failure: Windows failed to install the following update with error 0x80070002: [Package Title]”.
+Interpretation: Identifies whether multiple distinct updates are failing or if failure is isolated to a single package.
+
+7.5 Initiate Synchronous Windows Update Scan
+Operation Mode: [STATE-CHANGING] (Invokes client-side scan job)
+Purpose: Force the Windows Update Agent to contact the assigned update source immediately and report updates.
+# Usable on Windows 10/11 managed systems:
+$UpdateSession = New-Object -ComObject Microsoft.Update.Session
+$UpdateSearcher = $UpdateSession.CreateUpdateSearcher()
+$SearchResult = $UpdateSearcher.Search("IsInstalled=0 and Type='Software'")
+[PSCustomObject]@{
+    TotalUpdatesFound = $SearchResult.Updates.Count
+    Updates           = ($SearchResult.Updates | Select-Object -ExpandProperty Title)
+}
+
+Expected Output: Count of missing updates and array of titles.
+Interpretation: If the search throws a COM HRESULT (e.g., 0x80240438), the failure occurs during the query handshake, pointing to network, certificate, or endpoint access policies.
+
+8. Evidence and Log Collection
+When basic troubleshooting and image verification do not remediate the failure, gather the following diagnostic logs prior to ticket escalation.
+8.1 Generate Formatted Windows Update Log
+Windows 10 and 11 use Event Tracing for Windows (ETW) instead of writing directly to a text file. To produce a human-readable log:
+20.Open PowerShell as Administrator.
+21.Execute the decoding cmdlet:
+Get-WindowsUpdateLog -LogPath "$env:USERPROFILE\Desktop\WindowsUpdate.log"
+
+22.Output file location: Current user’s Desktop (WindowsUpdate.log).
+23.Review lines prefixed with FATAL: or WARNING: containing error HRESULTs (e.g., 8024xxxx).
+8.2 Collect Component-Based Servicing (CBS) and DISM Logs
+The CBS log contains transaction records for update package installation, file replacement operations, and servicing stack activities.
+CBS Log File: C:\Windows\Logs\CBS\CBS.log
+Archived CBS Logs: C:\Windows\Logs\CBS\CbsPersist_*.cab
+DISM Log File: C:\Windows\Logs\DISM\dism.log
+Extraction Action: Copy these files to an escalation staging directory (e.g., C:\Support\Logs\) using PowerShell:
+$LogDir = "C:\Support\Logs"
+New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+Copy-Item -Path "$env:windir\Logs\CBS\CBS.log" -Destination $LogDir -Force
+Copy-Item -Path "$env:windir\Logs\DISM\dism.log" -Destination $LogDir -Force
+
+8.3 Collect Windows Setup & Rollback Logs (For Feature Updates)
+If the failure occurred during an OS build upgrade or feature update:
+Rollback Log Path: $env:SystemDrive\$Windows.~BT\Sources\Panther\setupact.log
+Rollback Error Path: $env:SystemDrive\$Windows.~BT\Sources\Panther\setuperr.log
+
+9. Resolution Verification
+To confirm that the root cause is resolved and update servicing operates properly:
+24.Verify Update Status in GUI:
+Navigate to Settings > Windows Update.
+Click Check for updates.
+Confirm that the pending update downloads, installs, and moves to “Pending restart” or “You’re up to date” without throwing an error.
+25.Commit System Changes:
+Perform an operating system restart if requested by the update engine.
+26.Audit Installed Updates via PowerShell:
+Open PowerShell and verify package registration:
+Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 5
+
+Confirm that the previously failing KB article is listed with the current installation date.
+27.Audit Reliability History:
+Launch perfmon /rel via the Run dialog.
+Verify that the Windows Update record displays a blue Information icon with “Successful Windows Update” instead of a red Critical event.
+
+10. Escalation Criteria
+Escalate the incident to Tier 3 / Endpoint Engineering / Infrastructure Team if any of the following conditions are met:
+10.1 Escalation Triggers
+Unresolvable Component Store Corruption: DISM /Online /Cleanup-Image /RestoreHealth fails with 0x800F081F or reports that the repair source cannot be reached despite network availability.
+Persistent Access Denied (0x80070005): The error persists after resetting update components, indicating registry permission ACL corruption, restrictive group policies, or third-party filter driver locks.
+Recurring Driver Rollbacks: An OEM driver update deployed via Windows Update persistently bluescreens (BSOD) or rolls back upon reboot.
+Widespread Fleet Failure: Three or more enterprise endpoints report the identical failure code for the same KB update within a single deployment ring.
+10.2 Mandatory Escalation Package
+The support agent or autonomous system must attach the following evidence package to the escalated ticket:
+Device Hostname, OS Version, and Full Build Number (e.g., 10.0.22631.3007).
+Target KB Number and Failure Error Code (e.g., KB5034441, 0x80248007).
+Generated WindowsUpdate.log from Section 8.1.
+Recent entries of CBS.log surrounding the installation timestamp.
+Output of netsh winhttp show proxy and WSUS policy values from Step 7.2.
+History of remediation actions attempted (e.g., DISM, SFC, component cache reset).
+
+11. Safety and Rollback
+11.1 State-Changing Operations Summary
+Action	State Change	Rollback Procedure
+DISM /RestoreHealth	Replaces corrupted component store manifests from system image or upstream source.	Automated by Windows servicing engine. If system instability occurs, boot into WinRE and run DISM /Cleanup-MountPoints or restore from standard system restore point.
+SFC /scannow	Replaces damaged protected system files with clean cached copies from %windir%\WinSxS.	File replacements are logged in CBS.log. Backup copies are automatically managed by Windows Resource Protection.
+Folder Renaming (Step 6.5)	Takes existing SoftwareDistribution and catroot2 out of service.	Stop services (wuauserv, cryptsvc), delete newly created folders, and rename .old folders back to original names: ren SoftwareDistribution.old SoftwareDistribution.
+Manual MSU Install	Adds servicing package to Windows component database.	Navigate to Settings > Windows Update > Update history > Uninstall updates. Locate the KB and select Uninstall.
+
+11.2 Prohibited Actions
+NEVER run commands that delete the %windir%\System32\catroot directory. (Only catroot2 can be safely regenerated; deleting catroot destroys Windows system catalog files and compromises OS integrity).
+NEVER use unverified third-party “Windows Update Repair” batch scripts or utility software.
+NEVER disable Windows Defender, endpoint firewall, or EDR agents to “test” update downloads without signed security authorization.
+NEVER modify permissions recursively on the C:\Windows or C:\Program Files trees via takeown or icacls to bypass update errors.
+
+12. References
+Microsoft Learn — Windows Update Troubleshooting Guidance: https://learn.microsoft.com/troubleshoot/windows-client/installing-updates-features-roles/troubleshoot-windows-update-issues
+Microsoft Learn — Windows Update Error Code Reference: https://learn.microsoft.com/windows/deployment/update/windows-update-error-reference
+Microsoft Learn — Repair a Windows Image (DISM): https://learn.microsoft.com/windows-hardware/manufacture/desktop/repair-a-windows-image
+Microsoft Support — Using System File Checker in Windows: https://support.microsoft.com/windows/using-system-file-checker-in-windows-365e0031-36b1-6031-f804-8fd86e0ef4ca
+Microsoft Learn — Get-WindowsUpdateLog Cmdlet: https://learn.microsoft.com/powershell/module/windowsupdate/get-windowsupdatelog
+Microsoft Update Catalog: https://www.catalog.update.microsoft.com/
