@@ -102,12 +102,29 @@ def check_network() -> Finding:
     return Finding("network", severity, summary,
                    {"active_adapters": active, "internet_ok": internet_ok, "dns_ok": dns_ok})
 
+def check_top_processes(n: int = 5) -> Finding:
+    totals = {}
+    for p in psutil.process_iter(["name", "memory_info"]):
+        try:
+            mem = p.info["memory_info"]
+            if mem:
+                name = p.info["name"] or "unknown"
+                totals[name] = totals.get(name, 0) + mem.rss
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    top = sorted(totals.items(), key=lambda item: item[1], reverse=True)[:n]
+    top_list = [{"name": name, "memory_gb": round(rss / 1e9, 2)} for name, rss in top]
+    summary = (f"Biggest memory user: {top_list[0]['name']} ({top_list[0]['memory_gb']} GB)"
+               if top_list else "No process data available")
+    return Finding("processes", "ok", summary, {"top_memory": top_list})
 
 CHECKS_BY_CATEGORY = {
     "network":     [check_network],
     "storage":     [check_disks],
     "performance": [check_cpu, check_memory, check_disks, check_system],
     "general":     [check_system, check_cpu, check_memory, check_disks],
+    "performance": [check_cpu, check_memory, check_top_processes, check_disks, check_system],
 }
 
 
