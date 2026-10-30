@@ -70,3 +70,14 @@ def test_unknown_fix_is_rejected():
 
 def test_dry_run_deletes_nothing():
     assert clean_temp(dry_run=True)["dry_run"] is True
+
+def test_compare_findings_detects_improvement():
+    from src.scanner.fixes import compare_findings
+    before = [{"check": "disk", "severity": "bad", "summary": "C:\\ is 96% full",
+               "evidence": {"mount": "C:\\"}},
+              {"check": "cpu", "severity": "ok", "summary": "CPU at 10%", "evidence": {}}]
+    after = [{"check": "disk", "severity": "ok", "summary": "C:\\ is 70% full",
+              "evidence": {"mount": "C:\\"}}]
+    rows = compare_findings(before, after)
+    assert len(rows) == 1                 # cpu was not re-run, so it is skipped
+    assert rows[0]["result"] == "improved"

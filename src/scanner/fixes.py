@@ -96,3 +96,30 @@ def suggest_fixes(findings: list[dict], limit: int = 2) -> list[dict]:
             seen.add(fix["id"])
             result.append(fix)
     return result[:limit]
+
+
+FIX_CHECK = {"clean_temp": "storage", "flush_dns": "network"}
+
+_SEVERITY_RANK = {"ok": 0, "warn": 1, "bad": 2}
+
+
+def _key(finding: dict) -> tuple:
+    
+    return (finding["check"], finding["evidence"].get("mount", ""))
+
+
+def compare_findings(before: list[dict], after: list[dict]) -> list[dict]:
+    after_by_key = {_key(f): f for f in after}
+    rows = []
+    for old in before:
+        new = after_by_key.get(_key(old))
+        if new is None:
+            continue                  
+        change = _SEVERITY_RANK[new["severity"]] - _SEVERITY_RANK[old["severity"]]
+        rows.append({
+            "check": old["check"],
+            "before": old["summary"],
+            "after": new["summary"],
+            "result": "improved" if change < 0 else "worse" if change > 0 else "same",
+        })
+    return rows
