@@ -4,6 +4,9 @@ from pydantic import BaseModel
 from src.state import AgentState
 from src.orchestrator.classifier import llm
 from src.orchestrator.permissions import USER_ROLES, ROLE_PERMISSIONS
+from dataclasses import asdict
+from src.scanner.checks import run_for
+from src.scanner.fixes import run_fix, FIX_CHECK, compare_findings
 
 class ActionChoice(BaseModel):
     action: Literal["unlock_account", "grant_access", "unknown"]
@@ -49,8 +52,29 @@ def propose_action(state: AgentState) -> dict:
 def handle_approval(state: AgentState) -> dict:
     uid, action = state["user_id"], state["pending_action"]
     if state["user_message"].strip().lower() in ("yes", "y", "approve"):
-        result = EXECUTORS[action](uid)
-        log(uid, action, "EXECUTED")
-        return {"response": result, "pending_action": None}
+            
+            if action.startswith("fix:"):
+                return run_approved_fix(state)
+    result = EXECUTORS[action](uid)
+    log(uid, action, "EXECUTED")
+    return {"response": result, "pending_action": None}
     log(uid, action, "CANCELLED")
     return {"response": "Cancelled. No changes were made.", "pending_action": None}
+
+def run_approved_fix(state: AgentState) -> dict:
+    uid = state["user_id"]
+    fix_id = state["pending_action"].split(":", 1)[1]
+    try:
+        result = run_fix(fix_id, dry_run=False)
+    except Exception as e:
+        log(uid, f"fix:{fix_id}", f"FAILED: {e}")
+        return {"response": f"The fix failed: {e}. No further changes were made.",
+                "pending_action": None}
+    log(uid, f"fix:{fix_id}", "EXECUTED")
+
+    before = state.get("findings") or []
+    after = [asdict(f) for f in run_for(FIX_CHECK.get(fix_id, "general"))]
+    lines = [f"Ran {fix_id}: {result}", "", "Before vs after:"]
+    for r in compare_findings(before, after):
+        lines.append(f"- {r['check']}: {r['before']} -> {r['after']} ({r['result']})")
+    return {"response": "\n".join(lines), "pending_action": None, "findings": after}
