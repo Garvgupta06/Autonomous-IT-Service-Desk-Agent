@@ -190,10 +190,11 @@ form.addEventListener("submit", async ev => {
   if (Object.keys(errs).length) return;
   setBusy($("#submitBtn"), true);
   try {
-    await Api.createTicket({ ...d, requester: user.email });
-    res.className = "ok-box"; res.textContent = MOCK ? "Mock submission successful. This ticket was NOT saved anywhere." : "Ticket submitted.";
-    toast(MOCK ? "Mock ticket submitted (not saved)" : "Ticket submitted"); form.reset();
-  } catch (e) { res.className = "error-box"; res.textContent = "Couldn't submit the ticket. Your answers are kept; try again."; }
+    const created = Api.createTicket({ ...d, requester: user.email });
+    const made = await created;
+    res.className = "ok-box"; res.textContent = "Ticket created in Jira: " + made.key;
+    toast("Ticket " + made.key + " created"); form.reset();
+  } catch (e) { console.error(e); res.className = "error-box"; res.textContent = "Couldn't submit: " + e.message; }
   finally { setBusy($("#submitBtn"), false); }
 });
 

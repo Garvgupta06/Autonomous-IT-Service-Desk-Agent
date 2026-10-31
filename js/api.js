@@ -19,7 +19,8 @@ async function http(path, method = "GET", body) {
   }
   return res.json();
 }
-
+let CHAT_THREAD = "t" + Date.now();      // new thread per conversation
+document.getElementById("clearChat")?.addEventListener("click", () => { CHAT_THREAD = "t" + Date.now(); });
 const E = CONFIG.ENDPOINTS;
 // Expected shapes (to agree with backend):
 //  login/signup -> { user: {name, email, role: "user"|"admin"}, token }
@@ -30,7 +31,10 @@ const RealApi = {
   signup: b => http(E.signup, "POST", b),
   getTickets: () => http(E.tickets),
   updateTicketStatus: (id, status) => http(E.ticketStatus(id), "PATCH", { status }),
-  askAI: question => http(E.chat, "POST", { question }),
+  askAI: async question => {
+    const r = await http(E.chat, "POST", { user_id: "u1", message: question, thread_id: CHAT_THREAD });
+    return { answer: r.response, sources: [] };
+  },
   createTicket: t => http(E.tickets, "POST", t)
 };
-const Api = CONFIG.USE_MOCK ? MockApi : RealApi;
+const Api = CONFIG.USE_MOCK ? { ...MockApi, askAI: RealApi.askAI, createTicket: RealApi.createTicket } : RealApi;
