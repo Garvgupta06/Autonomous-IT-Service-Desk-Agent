@@ -7,7 +7,6 @@ from src.orchestrator.permissions import ROLE_PERMISSIONS
 
 
 # ---------- helpers ----------
-
 class FakeActionLLM:
     """Stands in for Gemini so the action agent tests are fast and repeatable."""
 
@@ -16,7 +15,6 @@ class FakeActionLLM:
 
     def invoke(self, messages):
         return ActionChoice(action=self.action)
-
 
 # ---------- lifecycle rules (offline) ----------
 
@@ -106,3 +104,19 @@ def test_unlock_flow_end_to_end():
 
     assert send("please unlock my account")["pending_action"] == "unlock_account"
     assert "unlocked" in send("yes")["response"].lower()
+
+
+def test_no_on_pending_fix_cancels_and_runs_nothing(monkeypatch):
+    called = []
+    monkeypatch.setattr(action_agent, "run_fix", lambda *a, **k: called.append(1))
+    out = action_agent.handle_approval(
+        {"user_id": "u1", "user_message": "no", "pending_action": "fix:clean_temp"})
+    assert out["pending_action"] is None
+    assert not called
+    assert AUDIT_LOG[-1]["outcome"] == "CANCELLED"
+
+
+def test_yes_with_punctuation_approves():
+    out = action_agent.handle_approval(
+        {"user_id": "u1", "user_message": "Yes.", "pending_action": "unlock_account"})
+    assert AUDIT_LOG[-1]["outcome"] == "EXECUTED"
