@@ -7,6 +7,7 @@ from src.orchestrator.permissions import USER_ROLES, ROLE_PERMISSIONS
 from dataclasses import asdict
 from src.scanner.checks import run_for
 from src.scanner.fixes import run_fix, FIX_CHECK, compare_findings
+import re
 
 class ActionChoice(BaseModel):
     action: Literal["unlock_account", "grant_access", "unknown"]
@@ -49,15 +50,18 @@ def propose_action(state: AgentState) -> dict:
     return {"response": f"I can {action} for you. Reply 'yes' to approve or 'no' to cancel.",
             "pending_action": action}
 
+YES_ANSWERS = {"yes", "y", "approve", "ok", "okay", "sure", "yes please", "do it"}
+
+
 def handle_approval(state: AgentState) -> dict:
     uid, action = state["user_id"], state["pending_action"]
-    if state["user_message"].strip().lower() in ("yes", "y", "approve"):
-            
-            if action.startswith("fix:"):
-                return run_approved_fix(state)
-    result = EXECUTORS[action](uid)
-    log(uid, action, "EXECUTED")
-    return {"response": result, "pending_action": None}
+    answer = re.sub(r"[^a-z ]", "", state["user_message"].lower()).strip()   # "Yes." -> "yes"
+    if answer in YES_ANSWERS:
+        if action.startswith("fix:"):
+            return run_approved_fix(state)
+        result = EXECUTORS[action](uid)
+        log(uid, action, "EXECUTED")
+        return {"response": result, "pending_action": None}
     log(uid, action, "CANCELLED")
     return {"response": "Cancelled. No changes were made.", "pending_action": None}
 
@@ -78,3 +82,4 @@ def run_approved_fix(state: AgentState) -> dict:
     for r in compare_findings(before, after):
         lines.append(f"- {r['check']}: {r['before']} -> {r['after']} ({r['result']})")
     return {"response": "\n".join(lines), "pending_action": None, "findings": after}
+
