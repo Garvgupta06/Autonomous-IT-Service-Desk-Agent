@@ -81,3 +81,18 @@ def test_compare_findings_detects_improvement():
     rows = compare_findings(before, after)
     assert len(rows) == 1                 # cpu was not re-run, so it is skipped
     assert rows[0]["result"] == "improved"
+
+
+def test_runbook_lookup_never_raises(monkeypatch):
+    import backend.rag.service as svc
+    def boom(*a, **k): raise RuntimeError("ollama down")
+    monkeypatch.setattr(svc, "retrieve", boom)
+    from src.orchestrator.knowledge import get_runbook_chunks
+    assert isinstance(get_runbook_chunks("vpn error 691"), list)   # falls back, never raises
+
+
+def test_rag_node_without_runbooks_asks_for_a_ticket(monkeypatch):
+    from src.orchestrator import knowledge
+    monkeypatch.setattr(knowledge, "get_runbook_chunks", lambda *a, **k: [])
+    out = knowledge.rag_node({"user_message": "anything"})
+    assert "ticket" in out["response"].lower()

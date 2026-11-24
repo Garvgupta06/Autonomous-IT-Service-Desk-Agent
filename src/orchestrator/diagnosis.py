@@ -5,6 +5,7 @@ from src.state import AgentState
 from src.scanner.checks import run_for
 from src.orchestrator.classifier import llm
 from src.scanner.fixes import suggest_fixes
+from src.orchestrator.knowledge import get_runbook_chunks, format_chunks, sources_line
 
 DIAGNOSE_PROMPT = """You are an IT support agent. The user reported a problem, and a scan of
 their laptop returned the findings below.
@@ -21,12 +22,20 @@ def scan_node(state: AgentState) -> dict:
 
 
 def diagnose_node(state: AgentState) -> dict:
+    problems = [f["summary"] for f in state["findings"] if f["severity"] in ("warn", "bad")]
+    chunks = get_runbook_chunks(" ".join([state["user_message"]] + problems), top_k=2)
+    runbook = ("\n\nRunbook excerpts (use only for advice, never invent steps):\n"
+               + format_chunks(chunks)) if chunks else ""
+
     reply = llm.invoke([
         ("system", DIAGNOSE_PROMPT),
         ("human", f"User problem: {state['user_message']}\n\n"
-                  f"Findings:\n{json.dumps(state['findings'], indent=2)}"),
+                  f"Findings:\n{json.dumps(state['findings'], indent=2)}{runbook}"),
     ])
     text = reply.text
+    if chunks:
+        text += "\n\n" + sources_line(chunks)
+
     pending = None
     fixes = suggest_fixes(state["findings"])
     if fixes:
