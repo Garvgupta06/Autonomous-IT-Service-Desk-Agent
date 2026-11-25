@@ -6,6 +6,8 @@ from src.orchestrator.classifier import classify_intent
 from src.orchestrator.stubs import rag_stub, clarify_node
 from src.orchestrator.action_agent import propose_action, handle_approval
 from src.orchestrator.diagnosis import scan_node, diagnose_node
+from src.orchestrator.stubs import clarify_node
+from src.orchestrator.knowledge import rag_node
 
 CONFIDENCE_THRESHOLD = 0.6
 
@@ -31,7 +33,7 @@ builder = StateGraph(AgentState)
 builder.add_node("classify", classify_intent)
 builder.add_node("scan", scan_node)
 builder.add_node("diagnose", diagnose_node)
-builder.add_node("rag", rag_stub)
+builder.add_node("rag", rag_node)
 builder.add_node("action", propose_action)
 builder.add_node("approval", handle_approval)
 builder.add_node("clarify", clarify_node)

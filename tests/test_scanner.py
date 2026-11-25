@@ -81,3 +81,28 @@ def test_compare_findings_detects_improvement():
     rows = compare_findings(before, after)
     assert len(rows) == 1                 # cpu was not re-run, so it is skipped
     assert rows[0]["result"] == "improved"
+
+
+def test_runbook_lookup_never_raises(monkeypatch):
+    import backend.rag.service as svc
+    def boom(*a, **k): raise RuntimeError("ollama down")
+    monkeypatch.setattr(svc, "retrieve", boom)
+    from src.orchestrator.knowledge import get_runbook_chunks
+    assert isinstance(get_runbook_chunks("vpn error 691"), list)   # falls back, never raises
+
+
+def test_rag_node_without_runbooks_asks_for_a_ticket(monkeypatch):
+    from src.orchestrator import knowledge
+    monkeypatch.setattr(knowledge, "get_runbook_chunks", lambda *a, **k: [])
+    out = knowledge.rag_node({"user_message": "anything"})
+    assert "ticket" in out["response"].lower()
+
+def test_internet_ok_when_only_port_443_is_reachable(monkeypatch):
+    from types import SimpleNamespace
+    from src.scanner import checks
+    monkeypatch.setattr(checks.psutil, "net_if_stats",
+                        lambda: {"Wi-Fi": SimpleNamespace(isup=True)})
+    monkeypatch.setattr(checks, "_can_connect", lambda host, port, timeout=3: port == 443)
+    monkeypatch.setattr(checks, "_https_ok", lambda: False)
+    monkeypatch.setattr(checks.socket, "gethostbyname", lambda host: "93.184.216.34")
+    assert checks.check_network().severity == "ok"

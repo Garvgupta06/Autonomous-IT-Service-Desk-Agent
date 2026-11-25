@@ -1,5 +1,6 @@
 import platform
 import socket
+import requests
 import time
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor
@@ -80,17 +81,32 @@ def check_disks() -> list[Finding]:
         ))
     return findings
 
+PROBES = [("1.1.1.1", 443), ("8.8.8.8", 443), ("example.com", 443)]
 
+
+def _can_connect(host: str, port: int, timeout: int = 3) -> bool:
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
+def _https_ok() -> bool:
+    try:
+        requests.head("https://www.google.com", timeout=3)
+        return True
+    except requests.RequestException:
+        return False
 def check_network() -> Finding:
     stats = psutil.net_if_stats()
     active = [n for n, s in stats.items()
               if s.isup and n != "lo" and "loopback" not in n.lower()]
 
-    try:
-        socket.create_connection(("8.8.8.8", 53), timeout=3).close()
-        internet_ok = True
-    except OSError:
-        internet_ok = False
+    with ThreadPoolExecutor() as pool:
+        results = [pool.submit(_can_connect, h, p) for h, p in PROBES]
+        results.append(pool.submit(_https_ok))
+        internet_ok = any(r.result() for r in results)
 
     try:
         socket.gethostbyname("example.com")

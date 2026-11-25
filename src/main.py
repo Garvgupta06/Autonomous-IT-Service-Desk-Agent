@@ -3,6 +3,7 @@ from src.graph import graph
 from pydantic import BaseModel
 from fastapi import HTTPException
 from src.jira.client import create_issue, JiraError
+import threading
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -55,3 +56,14 @@ def create_ticket(t: TicketRequest):
     except JiraError:
         raise HTTPException(status_code=502, detail="Could not create the ticket in Jira.")
     return {"key": issue["key"]}
+
+@app.on_event("startup")
+def warm_rag():
+    def _warm():
+        try:
+            from backend.rag.service import warm_up
+            warm_up()
+            print("RAG ready")
+        except Exception as exc:
+            print("RAG warm-up skipped:", exc)
+    threading.Thread(target=_warm, daemon=True).start()
