@@ -169,7 +169,7 @@ async function sendQuestion() {
   const q = input.value.trim(); if (!q) return;
   addMsg(q, "user"); input.value = ""; setBusy(sendBtn, true);
   const typing = addMsg("AI is thinking…", "ai typing");
-  try { const r = await Api.askAI(q); typing.remove(); addMsg(r.answer, "ai", r.sources, MOCK); }
+  try { const r = await Api.askAI(q); typing.remove(); addMsg(r.answer, "ai", r.sources, false); }
   catch (e) { typing.remove(); addMsg("Sorry, that question couldn't be answered. Check your connection and try again, or raise a ticket.", "ai error"); }
   finally { setBusy(sendBtn, false); input.focus(); }
 }
