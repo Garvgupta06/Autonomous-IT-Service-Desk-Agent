@@ -96,3 +96,13 @@ def test_rag_node_without_runbooks_asks_for_a_ticket(monkeypatch):
     monkeypatch.setattr(knowledge, "get_runbook_chunks", lambda *a, **k: [])
     out = knowledge.rag_node({"user_message": "anything"})
     assert "ticket" in out["response"].lower()
+
+def test_internet_ok_when_only_port_443_is_reachable(monkeypatch):
+    from types import SimpleNamespace
+    from src.scanner import checks
+    monkeypatch.setattr(checks.psutil, "net_if_stats",
+                        lambda: {"Wi-Fi": SimpleNamespace(isup=True)})
+    monkeypatch.setattr(checks, "_can_connect", lambda host, port, timeout=3: port == 443)
+    monkeypatch.setattr(checks, "_https_ok", lambda: False)
+    monkeypatch.setattr(checks.socket, "gethostbyname", lambda host: "93.184.216.34")
+    assert checks.check_network().severity == "ok"
