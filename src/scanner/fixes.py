@@ -1,11 +1,13 @@
 import ctypes
+import json
 import os
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
-from src.scanner.checks import read_device_problems
+from src.scanner.checks import (read_device_problems, read_driver_updates, run_powershell,
+                                DRIVER_SEARCH, MAX_DRIVER_INSTALLS)
 
 
 # ---------- the fixes themselves ----------
@@ -69,7 +71,51 @@ def enable_devices(dry_run: bool = True) -> dict:
     return {"enabled": enabled, "failed": failed, "dry_run": False}
 
 
-FIXES = {"clean_temp", "flush_dns", "enable_devices"}      # the allowlist
+_PS_INSTALL_DRIVERS = """
+$ErrorActionPreference = 'Stop'
+$s = New-Object -ComObject Microsoft.Update.Session
+$found = $s.CreateUpdateSearcher().Search("__SEARCH__").Updates
+$todo = New-Object -ComObject Microsoft.Update.UpdateColl
+foreach ($u in $found) {
+  if ($todo.Count -ge __MAX__) { break }
+  if ($u.EulaAccepted -and $u.DriverClass -ne 'Firmware') { [void]$todo.Add($u) }
+}
+$names = @(); $reboot = $false
+if ($todo.Count -gt 0) {
+  $d = $s.CreateUpdateDownloader(); $d.Updates = $todo; [void]$d.Download()
+  $i = $s.CreateUpdateInstaller(); $i.Updates = $todo; $res = $i.Install()
+  $reboot = [bool]$res.RebootRequired
+  for ($k = 0; $k -lt $todo.Count; $k++) {
+    if ($res.GetUpdateResult($k).ResultCode -eq 2) { $names += $todo.Item($k).Title }
+  }
+}
+@{ installed = $names; reboot = $reboot } | ConvertTo-Json -Compress
+""".replace("__SEARCH__", DRIVER_SEARCH).replace("__MAX__", str(MAX_DRIVER_INSTALLS))
+
+
+def update_drivers(dry_run: bool = True) -> dict:
+    """Install driver updates offered by Windows Update (at most MAX_DRIVER_INSTALLS
+    per run). Never accepts licence terms. Needs administrator rights."""
+    titles = [u["title"] for u in read_driver_updates()
+              if u["class"] != "Firmware"][:MAX_DRIVER_INSTALLS]     # firmware is never installed
+    if dry_run:
+        return {"would_install": titles, "dry_run": True}
+    if not _is_admin():
+        raise PermissionError("Installing drivers needs administrator rights. "
+                              "Restart the backend from an administrator terminal.")
+    out = run_powershell(_PS_INSTALL_DRIVERS, timeout=1800)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.strip()[:200] or "driver install failed")
+    lines = out.stdout.strip().splitlines()
+    data = json.loads(lines[-1]) if lines else {}
+    installed = data.get("installed") or []
+    if isinstance(installed, str):
+        installed = [installed]
+    return {"installed": installed, "reboot_required": bool(data.get("reboot")),
+            "dry_run": False}
+
+
+FIXES = {"clean_temp", "flush_dns", "enable_devices", "update_drivers"}      # the allowlist
 
 
 def run_fix(fix_id: str, dry_run: bool = True) -> dict:
@@ -79,6 +125,8 @@ def run_fix(fix_id: str, dry_run: bool = True) -> dict:
         return clean_temp(dry_run=dry_run)
     if fix_id == "enable_devices":
         return enable_devices(dry_run=dry_run)
+    if fix_id == "update_drivers":
+        return update_drivers(dry_run=dry_run)
     if dry_run:
         return {"fix": fix_id, "dry_run": True}
     return flush_dns()
@@ -131,6 +179,26 @@ def suggest_fixes(findings: list[dict], limit: int = 2) -> list[dict]:
                              + " from Windows Update or the manufacturer",
                     "why": f["summary"]}))
 
+        if f["check"] == "drivers" and f["evidence"].get("updates"):
+            ups = f["evidence"]["updates"]
+            installable = [u for u in ups if u["class"] != "Firmware"]
+            firmware = [u["title"] for u in ups if u["class"] == "Firmware"]
+            if installable:
+                n = min(len(installable), MAX_DRIVER_INSTALLS)
+                candidates.append((_rank(f), {
+                    "id": "update_drivers", "automatic": True, "risk": "medium",
+                    "title": f"Install {n} driver update(s) from Windows Update "
+                             "(needs administrator rights, can take several minutes, "
+                             "may need a restart)",
+                    "why": f["summary"]}))
+            if firmware:
+                candidates.append((_rank(f), {
+                    "id": "firmware_update", "automatic": False, "risk": "high",
+                    "title": "Firmware update available (" + ", ".join(firmware)
+                             + "). Install it with the manufacturer's own tool while "
+                             "plugged in to power. The agent never installs firmware.",
+                    "why": f["summary"]}))
+
         if f["check"] == "memory" and problem and top_apps:
             app = top_apps[0]
             candidates.append((_rank(f), {
@@ -148,7 +216,8 @@ def suggest_fixes(findings: list[dict], limit: int = 2) -> list[dict]:
     return result[:limit]
 
 
-FIX_CHECK = {"clean_temp": "storage", "flush_dns": "network", "enable_devices": "device"}
+FIX_CHECK = {"clean_temp": "storage", "flush_dns": "network", "enable_devices": "device",
+             "update_drivers": "drivers"}
 
 _SEVERITY_RANK = {"ok": 0, "warn": 1, "bad": 2}
 

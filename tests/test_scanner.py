@@ -1,5 +1,5 @@
 from src.scanner import checks, fixes
-from src.scanner.checks import judge_usage, judge_network, parse_device_problems
+from src.scanner.checks import judge_usage, judge_network, parse_device_problems, parse_driver_updates
 import pytest
 from src.scanner.fixes import suggest_fixes, run_fix, clean_temp
 
@@ -179,3 +179,111 @@ def test_enable_devices_only_touches_disabled_ones(monkeypatch):
     monkeypatch.setattr(fixes.subprocess, "run", lambda cmd, **k: calls.append(k["env"]["PNP_ID"]) or Done())
     result = run_fix("enable_devices", dry_run=False)
     assert result["enabled"] == ["Intel Wireless Bluetooth"] and len(calls) == 1
+
+
+# ---------- driver updates ----------
+
+ROW = {"Title": "Realtek - Bluetooth - 1.2.3", "Id": "abc", "Class": "Bluetooth", "Maker": "Realtek"}
+
+
+def test_driver_updates_parse_single_object_and_list():
+    assert parse_driver_updates(ROW)[0]["title"] == "Realtek - Bluetooth - 1.2.3"
+    assert len(parse_driver_updates([ROW, {**ROW, "Title": "Intel - Net"}])) == 2
+    assert parse_driver_updates([]) == []
+
+
+def test_driver_check_reports_pending_updates(monkeypatch):
+    monkeypatch.setattr(checks.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(checks, "read_driver_updates", lambda: parse_driver_updates([ROW]))
+    f = checks.check_driver_updates()
+    assert f.severity == "warn" and "Realtek" in f.summary
+
+
+def test_driver_check_ok_when_nothing_pending(monkeypatch):
+    monkeypatch.setattr(checks.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(checks, "read_driver_updates", lambda: [])
+    assert checks.check_driver_updates().severity == "ok"
+
+
+def test_driver_check_offline_is_a_warning_not_a_crash(monkeypatch):
+    monkeypatch.setattr(checks.platform, "system", lambda: "Windows")
+    def boom(): raise OSError("no internet")
+    monkeypatch.setattr(checks, "read_driver_updates", boom)
+    assert checks.check_driver_updates().severity == "warn"
+
+
+def test_driver_check_skips_non_windows(monkeypatch):
+    monkeypatch.setattr(checks.platform, "system", lambda: "Linux")
+    assert checks.check_driver_updates().severity == "ok"
+
+
+def test_pending_driver_updates_suggest_the_fix_with_warnings():
+    f = finding("drivers", "warn", updates=parse_driver_updates([ROW]))
+    fix = suggest_fixes([f])[0]
+    assert fix["id"] == "update_drivers" and fix["risk"] == "medium"
+    assert "administrator" in fix["title"] and "restart" in fix["title"]
+
+
+def test_no_pending_updates_suggests_nothing():
+    assert suggest_fixes([finding("drivers", "ok", updates=[])]) == []
+
+
+def test_update_drivers_dry_run_installs_nothing(monkeypatch):
+    many = parse_driver_updates([{**ROW, "Title": f"Driver {i}"} for i in range(5)])
+    monkeypatch.setattr(fixes, "read_driver_updates", lambda: many)
+    def no_run(*a, **k): raise AssertionError("must not install in a dry run")
+    monkeypatch.setattr(fixes, "run_powershell", no_run)
+    result = run_fix("update_drivers")
+    assert result["dry_run"] is True and len(result["would_install"]) == 3   # capped
+
+
+def test_update_drivers_needs_admin(monkeypatch):
+    monkeypatch.setattr(fixes, "read_driver_updates", lambda: parse_driver_updates([ROW]))
+    monkeypatch.setattr(fixes, "_is_admin", lambda: False)
+    with pytest.raises(PermissionError):
+        run_fix("update_drivers", dry_run=False)
+
+
+def test_update_drivers_reports_result_and_reboot(monkeypatch):
+    monkeypatch.setattr(fixes, "read_driver_updates", lambda: parse_driver_updates([ROW]))
+    monkeypatch.setattr(fixes, "_is_admin", lambda: True)
+    class Done:
+        returncode = 0
+        stdout = '{"installed":["Realtek - Bluetooth - 1.2.3"],"reboot":true}\n'
+        stderr = ""
+    monkeypatch.setattr(fixes, "run_powershell", lambda script, timeout: Done())
+    result = run_fix("update_drivers", dry_run=False)
+    assert result["installed"] == ["Realtek - Bluetooth - 1.2.3"] and result["reboot_required"] is True
+
+
+def test_update_drivers_failure_is_raised_not_hidden(monkeypatch):
+    monkeypatch.setattr(fixes, "read_driver_updates", lambda: parse_driver_updates([ROW]))
+    monkeypatch.setattr(fixes, "_is_admin", lambda: True)
+    class Bad:
+        returncode = 1
+        stdout = ""
+        stderr = "0x80240024 no updates"
+    monkeypatch.setattr(fixes, "run_powershell", lambda script, timeout: Bad())
+    with pytest.raises(RuntimeError):
+        run_fix("update_drivers", dry_run=False)
+
+
+def test_install_script_never_accepts_licence_terms():
+    assert "AcceptEula" not in fixes._PS_INSTALL_DRIVERS
+    assert "EulaAccepted" in fixes._PS_INSTALL_DRIVERS
+
+
+def test_firmware_is_never_installed_only_advised():
+    assert "'Firmware'" in fixes._PS_INSTALL_DRIVERS
+    firmware = {**ROW, "Title": "Lenovo Ltd. - Firmware - 1.19.0.0", "Class": "Firmware"}
+    only_fw = suggest_fixes([finding("drivers", "warn", updates=parse_driver_updates([firmware]))])
+    assert [f["id"] for f in only_fw] == ["firmware_update"] and only_fw[0]["automatic"] is False
+    mixed = suggest_fixes([finding("drivers", "warn", updates=parse_driver_updates([ROW, firmware]))])
+    assert [f["id"] for f in mixed] == ["update_drivers", "firmware_update"]
+
+
+def test_update_drivers_dry_run_skips_firmware(monkeypatch):
+    firmware = {**ROW, "Title": "Some Firmware", "Class": "Firmware"}
+    monkeypatch.setattr(fixes, "read_driver_updates", lambda: parse_driver_updates([firmware, ROW]))
+    assert run_fix("update_drivers")["would_install"] == ["Realtek - Bluetooth - 1.2.3"]
+
