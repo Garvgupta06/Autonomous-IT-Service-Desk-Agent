@@ -1,5 +1,7 @@
+import json
 import platform
 import socket
+import subprocess
 import requests
 import time
 from dataclasses import dataclass, field
@@ -135,10 +137,72 @@ def check_top_processes(n: int = 5) -> Finding:
                if top_list else "No process data available")
     return Finding("processes", "ok", summary, {"top_memory": top_list})
 
+# ---------- devices (Windows only) ----------
+# Deliberately narrow. Windows reports harmless entries too (for example NVIDIA
+# or AMD software components with a non-OK status), so only user-facing device
+# classes with an actionable problem code are flagged.
+
+DEVICE_CLASSES = ("Bluetooth", "Media", "AudioEndpoint", "Camera", "Image", "Printer")
+DEVICE_PROBLEMS = {                      # problem code name -> plain reason
+    "CM_PROB_DISABLED": "disabled",
+    "CM_PROB_FAILED_INSTALL": "no driver installed",
+    "CM_PROB_NOT_CONFIGURED": "no driver installed",
+}
+_PROBLEM_CODES = {22: "CM_PROB_DISABLED", 28: "CM_PROB_FAILED_INSTALL",
+                  1: "CM_PROB_NOT_CONFIGURED"}
+
+_PS_LIST_DEVICES = (
+    "Get-PnpDevice -PresentOnly | Where-Object { $_.Status -ne 'OK' } | "
+    "Select-Object FriendlyName, Class, InstanceId, "
+    "@{n='Problem';e={[string]$_.Problem}} | ConvertTo-Json -Compress"
+)
+
+
+def parse_device_problems(rows) -> list[dict]:
+    """Keep only user-facing devices that are disabled or have no driver."""
+    if isinstance(rows, dict):           # PowerShell returns one object, not a list
+        rows = [rows]
+    problems = []
+    for row in rows or []:
+        code = row.get("Problem")
+        try:
+            code = _PROBLEM_CODES.get(int(code), code)     # numeric code -> name
+        except (TypeError, ValueError):
+            pass
+        if row.get("Class") in DEVICE_CLASSES and code in DEVICE_PROBLEMS:
+            problems.append({"name": row.get("FriendlyName") or "Unknown device",
+                             "class": row["Class"], "id": row.get("InstanceId", ""),
+                             "reason": DEVICE_PROBLEMS[code]})
+    return problems
+
+
+def read_device_problems() -> list[dict]:
+    """Ask Windows for devices in a bad state. Raises OSError, TimeoutExpired or ValueError."""
+    out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                          _PS_LIST_DEVICES], capture_output=True, text=True, timeout=30)
+    raw = out.stdout.strip()
+    return parse_device_problems(json.loads(raw) if raw else [])
+
+
+def check_devices() -> Finding:
+    if platform.system() != "Windows":
+        return Finding("devices", "ok", "Device check is only available on Windows",
+                       {"problems": []})
+    try:
+        problems = read_device_problems()
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return Finding("devices", "warn", "Could not read the device list", {"problems": []})
+    if not problems:
+        return Finding("devices", "ok", "No disabled or driverless devices found",
+                       {"problems": []})
+    text = "; ".join(f"{p['name']} ({p['reason']})" for p in problems)
+    return Finding("devices", "bad", f"Device problem: {text}", {"problems": problems})
+
+
 CHECKS_BY_CATEGORY = {
     "network":     [check_network],
     "storage":     [check_disks],
-    "performance": [check_cpu, check_memory, check_disks, check_system],
+    "device":      [check_devices],
     "general":     [check_system, check_cpu, check_memory, check_disks],
     "performance": [check_cpu, check_memory, check_top_processes, check_disks, check_system],
 }
