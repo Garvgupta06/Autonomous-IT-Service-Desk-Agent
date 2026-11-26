@@ -8,7 +8,7 @@ load_dotenv()
 class IntentResult(BaseModel):
     intent: Literal["knowledge_question","action_request","unclear"]
     confidence: float = Field(ge=0.0, le=1.0)
-    category: Literal["network", "storage", "performance", "general", "none"] = "general"
+    category: Literal["network", "storage", "performance", "device", "general", "none"] = "general"
 
 llm=ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 classifier_llm = llm.with_structured_output(IntentResult)
@@ -23,6 +23,7 @@ Also pick the problem category:
 - network: wifi, internet, vpn, connection problems
 - storage: disk space, full drive, files
 - performance: slow, lagging, freezing, high memory or cpu
+- device: bluetooth, sound or audio, microphone, webcam or printer not working or not detected
 - general: a device problem that fits none of the above
 - none: not about a problem on the user's laptop (how-to questions, policy, accounts)
 Also return a confidence between 0 and 1. Use a low value if unsure."""

@@ -1,4 +1,5 @@
-from src.scanner.checks import judge_usage, judge_network
+from src.scanner import checks, fixes
+from src.scanner.checks import judge_usage, judge_network, parse_device_problems
 import pytest
 from src.scanner.fixes import suggest_fixes, run_fix, clean_temp
 
@@ -106,3 +107,75 @@ def test_internet_ok_when_only_port_443_is_reachable(monkeypatch):
     monkeypatch.setattr(checks, "_https_ok", lambda: False)
     monkeypatch.setattr(checks.socket, "gethostbyname", lambda host: "93.184.216.34")
     assert checks.check_network().severity == "ok"
+
+
+# ---------- devices ----------
+
+BLUETOOTH_OFF = {"FriendlyName": "Intel Wireless Bluetooth", "Class": "Bluetooth",
+                 "InstanceId": "USB\\VID_8087", "Problem": "CM_PROB_DISABLED"}
+
+
+def test_harmless_nvidia_and_amd_entries_are_ignored():
+    rows = [
+        {"FriendlyName": "NVIDIA Platform Controllers and Framework", "Class": "SoftwareDevice",
+         "Problem": "CM_PROB_FAILED_ADD"},
+        {"FriendlyName": "AMD LOG", "Class": "System", "Problem": "CM_PROB_NONE"},
+    ]
+    assert parse_device_problems(rows) == []
+
+
+def test_disabled_bluetooth_is_found_from_name_or_numeric_code():
+    assert parse_device_problems([BLUETOOTH_OFF])[0]["reason"] == "disabled"
+    as_number = {**BLUETOOTH_OFF, "Problem": 22}
+    assert parse_device_problems(as_number)[0]["reason"] == "disabled"   # single object, not a list
+
+
+def test_unreadable_device_list_is_a_warning_not_a_crash(monkeypatch):
+    monkeypatch.setattr(checks.platform, "system", lambda: "Windows")
+    def boom(): raise OSError("no powershell")
+    monkeypatch.setattr(checks, "read_device_problems", boom)
+    assert checks.check_devices().severity == "warn"
+
+
+def test_device_check_skips_non_windows(monkeypatch):
+    monkeypatch.setattr(checks.platform, "system", lambda: "Linux")
+    assert checks.check_devices().severity == "ok"
+
+
+def test_disabled_device_suggests_enable_with_name_and_admin_note():
+    problems = parse_device_problems([BLUETOOTH_OFF])
+    fix = suggest_fixes([finding("devices", "bad", problems=problems)])[0]
+    assert fix["id"] == "enable_devices" and fix["automatic"] is True
+    assert "Intel Wireless Bluetooth" in fix["title"] and "administrator" in fix["title"]
+
+
+def test_driverless_device_gets_advice_only():
+    rows = [{**BLUETOOTH_OFF, "Problem": "CM_PROB_FAILED_INSTALL"}]
+    fix = suggest_fixes([finding("devices", "bad", problems=parse_device_problems(rows))])[0]
+    assert fix["id"] == "install_driver" and fix["automatic"] is False
+
+
+def test_enable_devices_dry_run_changes_nothing(monkeypatch):
+    monkeypatch.setattr(fixes, "read_device_problems", lambda: parse_device_problems([BLUETOOTH_OFF]))
+    def no_run(*a, **k): raise AssertionError("must not run a command in a dry run")
+    monkeypatch.setattr(fixes.subprocess, "run", no_run)
+    assert run_fix("enable_devices")["would_enable"] == ["Intel Wireless Bluetooth"]
+
+
+def test_enable_devices_needs_admin(monkeypatch):
+    monkeypatch.setattr(fixes, "read_device_problems", lambda: parse_device_problems([BLUETOOTH_OFF]))
+    monkeypatch.setattr(fixes, "_is_admin", lambda: False)
+    with pytest.raises(PermissionError):
+        run_fix("enable_devices", dry_run=False)
+
+
+def test_enable_devices_only_touches_disabled_ones(monkeypatch):
+    rows = [BLUETOOTH_OFF, {**BLUETOOTH_OFF, "FriendlyName": "No driver cam", "Class": "Camera",
+                            "InstanceId": "X", "Problem": "CM_PROB_FAILED_INSTALL"}]
+    monkeypatch.setattr(fixes, "read_device_problems", lambda: parse_device_problems(rows))
+    monkeypatch.setattr(fixes, "_is_admin", lambda: True)
+    calls = []
+    class Done: returncode = 0
+    monkeypatch.setattr(fixes.subprocess, "run", lambda cmd, **k: calls.append(k["env"]["PNP_ID"]) or Done())
+    result = run_fix("enable_devices", dry_run=False)
+    assert result["enabled"] == ["Intel Wireless Bluetooth"] and len(calls) == 1

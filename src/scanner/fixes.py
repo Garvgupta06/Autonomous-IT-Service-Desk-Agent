@@ -1,8 +1,11 @@
+import ctypes
 import os
 import subprocess
 import tempfile
 import time
 from pathlib import Path
+
+from src.scanner.checks import read_device_problems
 
 
 # ---------- the fixes themselves ----------
@@ -39,7 +42,34 @@ def flush_dns() -> dict:
     return {"returncode": out.returncode, "output": out.stdout.strip()}
 
 
-FIXES = {"clean_temp", "flush_dns"}      # the allowlist
+def _is_admin() -> bool:
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):     # not Windows
+        return False
+
+
+def enable_devices(dry_run: bool = True) -> dict:
+    """Enable devices that are disabled. Only the classes listed in
+    checks.DEVICE_CLASSES are ever touched. Driverless devices are left alone."""
+    targets = [d for d in read_device_problems() if d["reason"] == "disabled"]
+    if dry_run:
+        return {"would_enable": [d["name"] for d in targets], "dry_run": True}
+    if not _is_admin():
+        raise PermissionError("Enabling a device needs administrator rights. "
+                              "Restart the backend from an administrator terminal.")
+    enabled, failed = [], []
+    for d in targets:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Enable-PnpDevice -InstanceId $env:PNP_ID -Confirm:$false -ErrorAction Stop"],
+            capture_output=True, text=True, timeout=30,
+            env={**os.environ, "PNP_ID": d["id"]})     # id from Windows, never from the user
+        (enabled if out.returncode == 0 else failed).append(d["name"])
+    return {"enabled": enabled, "failed": failed, "dry_run": False}
+
+
+FIXES = {"clean_temp", "flush_dns", "enable_devices"}      # the allowlist
 
 
 def run_fix(fix_id: str, dry_run: bool = True) -> dict:
@@ -47,6 +77,8 @@ def run_fix(fix_id: str, dry_run: bool = True) -> dict:
         raise ValueError(f"unknown fix '{fix_id}'")
     if fix_id == "clean_temp":
         return clean_temp(dry_run=dry_run)
+    if fix_id == "enable_devices":
+        return enable_devices(dry_run=dry_run)
     if dry_run:
         return {"fix": fix_id, "dry_run": True}
     return flush_dns()
@@ -81,6 +113,24 @@ def suggest_fixes(findings: list[dict], limit: int = 2) -> list[dict]:
                 "title": "Flush the DNS cache",
                 "why": f["summary"]}))
 
+        if f["check"] == "devices" and f["evidence"].get("problems"):
+            disabled = [p["name"] for p in f["evidence"]["problems"]
+                        if p["reason"] == "disabled"]
+            no_driver = [p["name"] for p in f["evidence"]["problems"]
+                         if p["reason"] != "disabled"]
+            if disabled:
+                candidates.append((_rank(f), {
+                    "id": "enable_devices", "automatic": True, "risk": "low",
+                    "title": "Enable the disabled device: " + ", ".join(disabled)
+                             + " (needs administrator rights)",
+                    "why": f["summary"]}))
+            if no_driver:
+                candidates.append((_rank(f), {
+                    "id": "install_driver", "automatic": False, "risk": "medium",
+                    "title": "Reinstall the driver for " + ", ".join(no_driver)
+                             + " from Windows Update or the manufacturer",
+                    "why": f["summary"]}))
+
         if f["check"] == "memory" and problem and top_apps:
             app = top_apps[0]
             candidates.append((_rank(f), {
@@ -98,7 +148,7 @@ def suggest_fixes(findings: list[dict], limit: int = 2) -> list[dict]:
     return result[:limit]
 
 
-FIX_CHECK = {"clean_temp": "storage", "flush_dns": "network"}
+FIX_CHECK = {"clean_temp": "storage", "flush_dns": "network", "enable_devices": "device"}
 
 _SEVERITY_RANK = {"ok": 0, "warn": 1, "bad": 2}
 
