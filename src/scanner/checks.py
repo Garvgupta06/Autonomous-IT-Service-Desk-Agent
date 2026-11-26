@@ -1,3 +1,4 @@
+import base64
 import json
 import platform
 import socket
@@ -199,10 +200,76 @@ def check_devices() -> Finding:
     return Finding("devices", "bad", f"Device problem: {text}", {"problems": problems})
 
 
+# ---------- driver updates (Windows Update) ----------
+# Windows cannot say by itself that a driver is "outdated". Windows Update can
+# list the driver updates it offers, so that is the source used here. Only
+# updates whose licence terms are already accepted are listed, because the
+# install step never accepts licence terms on the user's behalf.
+
+DRIVER_SEARCH = "IsInstalled=0 and Type='Driver' and IsHidden=0"
+MAX_DRIVER_INSTALLS = 3
+
+_PS_LIST_DRIVER_UPDATES = """
+$ErrorActionPreference = 'Stop'
+$s = New-Object -ComObject Microsoft.Update.Session
+$r = $s.CreateUpdateSearcher().Search("__SEARCH__")
+$r.Updates | Where-Object { $_.EulaAccepted } | ForEach-Object {
+  [pscustomobject]@{ Title = $_.Title; Id = $_.Identity.UpdateID;
+                     Class = $_.DriverClass; Maker = $_.DriverManufacturer }
+} | ConvertTo-Json -Compress
+""".replace("__SEARCH__", DRIVER_SEARCH)
+
+
+def run_powershell(script: str, timeout: int) -> subprocess.CompletedProcess:
+    """Run a fixed script. -EncodedCommand avoids every quoting problem."""
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+        capture_output=True, text=True, errors="replace", timeout=timeout)
+
+
+def parse_driver_updates(rows) -> list[dict]:
+    if isinstance(rows, dict):           # PowerShell returns one object, not a list
+        rows = [rows]
+    return [{"title": r["Title"], "id": r.get("Id", ""),
+             "class": r.get("Class") or "", "maker": r.get("Maker") or ""}
+            for r in rows or [] if r.get("Title")]
+
+
+def read_driver_updates() -> list[dict]:
+    """Ask Windows Update for pending driver updates. Needs internet.
+    Raises OSError, TimeoutExpired or ValueError."""
+    out = run_powershell(_PS_LIST_DRIVER_UPDATES, timeout=120)
+    if out.returncode != 0:
+        raise OSError(out.stderr.strip()[:200] or "Windows Update search failed")
+    raw = out.stdout.strip()
+    return parse_driver_updates(json.loads(raw) if raw else [])
+
+
+def check_driver_updates() -> Finding:
+    if platform.system() != "Windows":
+        return Finding("drivers", "ok", "Driver check is only available on Windows",
+                       {"updates": []})
+    try:
+        updates = read_driver_updates()
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return Finding("drivers", "warn",
+                       "Could not check Windows Update for driver updates "
+                       "(needs an internet connection)", {"updates": []})
+    if not updates:
+        return Finding("drivers", "ok", "Windows Update offers no pending driver updates",
+                       {"updates": []})
+    titles = [u["title"] for u in updates]
+    shown = "; ".join(titles[:5]) + (f" and {len(titles) - 5} more" if len(titles) > 5 else "")
+    return Finding("drivers", "warn",
+                   f"{len(updates)} driver update(s) available: {shown}", {"updates": updates})
+
+
 CHECKS_BY_CATEGORY = {
     "network":     [check_network],
     "storage":     [check_disks],
     "device":      [check_devices],
+    "drivers":     [check_driver_updates],
     "general":     [check_system, check_cpu, check_memory, check_disks],
     "performance": [check_cpu, check_memory, check_top_processes, check_disks, check_system],
 }
@@ -222,4 +289,4 @@ if __name__ == "__main__":
     category = sys.argv[1] if len(sys.argv) > 1 else "general"
     for f in run_for(category):
         print(f"[{f.severity.upper():4}] {f.check:8} {f.summary}")
-        print("        evidence:", f.evidence)
+        print("        evidence:", f.evidence)  
